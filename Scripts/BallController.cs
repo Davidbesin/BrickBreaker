@@ -2,20 +2,26 @@ using UnityEngine;
 using UnityEngine.Events;
 
 [RequireComponent(typeof(Rigidbody))]
+[RequireComponent(typeof(SphereCollider))]
 public class BallController : MonoBehaviour
 {
     private Rigidbody rb;
+    private SphereCollider sphere;
 
     [Header("Movement")]
-    [SerializeField] private float speed = 8f;
+    [SerializeField] private float speed = 4.5f;
 
     [Header("Bounce")]
-    [SerializeField] private float angleThreshold = 0.1f;
-    [SerializeField] private float randomOffset = 0.4f;
+    [SerializeField] private float minAngle = 0.2f;
 
-     public UnityEvent onCollision;
+    [Header("Collision")]
+    [SerializeField] private float skinWidth = 0.001f;
+    [SerializeField] private LayerMask collisionMask;
+
+    public UnityEvent onCollision;
 
     private Vector3 direction;
+
 
     public Vector3 Direction
     {
@@ -23,16 +29,26 @@ public class BallController : MonoBehaviour
         set => direction = value.normalized;
     }
 
-    private void Start()
+
+    private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-        rb.useGravity = false;
+        sphere = GetComponent<SphereCollider>();
     }
+
+
+    private void Start()
+    {
+        rb.useGravity = false;
+        rb.isKinematic = true;
+    }
+
 
     private void FixedUpdate()
     {
         MoveBall();
     }
+
 
     private void MoveBall()
     {
@@ -40,82 +56,138 @@ public class BallController : MonoBehaviour
             BallPaddleManager.BallState.onPaddle)
             return;
 
-        rb.MovePosition(rb.position + Direction * speed * Time.fixedDeltaTime);
+
+        float distance = speed * Time.fixedDeltaTime;
+
+
+        RaycastHit hit;
+
+
+        bool hasHit = Physics.SphereCast(
+            rb.position,
+            sphere.radius * transform.lossyScale.x,
+            Direction,
+            out hit,
+            distance,
+            collisionMask
+        );
+
+
+        // Nothing hit
+        if (!hasHit)
+        {
+            rb.MovePosition(
+                rb.position + Direction * distance
+            );
+
+            return;
+        }
+
+
+        // Move exactly to impact point
+        Vector3 impactPoint =
+            rb.position + Direction * hit.distance;
+
+
+        HandleHit(hit, impactPoint);
     }
+
+
+
+    private void HandleHit(RaycastHit hit, Vector3 impactPoint)
+    {
+        // Move to collision point first
+        rb.MovePosition(
+            impactPoint + hit.normal * skinWidth
+        );
+
+
+        // Paddle controls angle
+        if (hit.collider.CompareTag("Paddle"))
+        {
+            float hitX =
+                (hit.point.x - hit.collider.bounds.center.x) /
+                (hit.collider.bounds.size.x * 0.5f);
+
+
+            PaddlePush(hitX);
+
+            onCollision?.Invoke();
+            return;
+        }
+
+
+
+        // Brick damage
+        if (hit.collider.CompareTag("Brick"))
+        {
+            Brick brick = hit.collider.GetComponent<Brick>();
+
+            if (brick != null)
+                brick.Damage();
+        }
+
+
+
+        // Bounce
+        Direction =
+            Vector3.Reflect(Direction, hit.normal)
+            .normalized;
+
+
+
+        // Prevent dead angles
+        PreventDeadAngles();
+
+
+
+        onCollision?.Invoke();
+    }
+
+
+
+    private void PreventDeadAngles()
+    {
+        Vector3 newDirection = Direction;
+
+
+        // Prevent horizontal movement only
+        if (Mathf.Abs(newDirection.y) < minAngle)
+        {
+            newDirection.y =
+                Mathf.Sign(newDirection.y == 0 ? 1 : newDirection.y)
+                * minAngle;
+        }
+
+
+        // Prevent vertical movement only
+        if (Mathf.Abs(newDirection.x) < minAngle)
+        {
+            newDirection.x =
+                Mathf.Sign(newDirection.x == 0 ? 1 : newDirection.x)
+                * minAngle;
+        }
+
+
+        Direction = newDirection.normalized;
+    }
+
+
 
     public void PaddlePush(float hitX)
     {
-        // Clamp so the ball can never launch at an extreme angle
         hitX = Mathf.Clamp(hitX, -1f, 1f);
 
         Direction = new Vector3(hitX, 1f, 0f);
+
+        PreventDeadAngles();
     }
 
-    private void OnCollisionEnter(Collision collision)
-        {
-            // Paddle controls the outgoing angle
-            if (collision.gameObject.CompareTag("Paddle"))
-            {
-                float hitX =
-                    (transform.position.x - collision.collider.bounds.center.x) /
-                    (collision.collider.bounds.size.x * 0.5f);
 
-                PaddlePush(hitX);
-                return;
-            }
-
-            // Reflect off walls and bricks
-            Vector3 normal = collision.GetContact(0).normal;
-            Vector3 before = Direction;
-
-            Direction = Vector3.Reflect(Direction, normal).normalized;
-
-            /* Debug.Log($"[{collision.gameObject.name}] tag={collision.gameObject.tag} " +
-                    $"contactCount={collision.contactCount} normal={normal} " +
-                    $"before={before} after={Direction}"); */
-
-            // Log all contact points if there's more than one — helps spot bad-normal cases
-            if (collision.contactCount > 1)
-            {
-                for (int i = 0; i < collision.contactCount; i++)
-                {
-                    Debug.Log($"  contact[{i}] normal={collision.GetContact(i).normal} point={collision.GetContact(i).point}");
-                }
-            }
-
-            // Prevent almost vertical loops
-            if (Mathf.Abs(Direction.x) < angleThreshold)
-            {
-                Direction += new Vector3(
-                    Mathf.Sign(Direction.x == 0 ? Random.value - 0.5f : Direction.x) * randomOffset,
-                    0f,
-                    0f);
-            }
-
-            // Prevent almost horizontal loops
-            if (Mathf.Abs(Direction.y) < angleThreshold)
-            {
-                Direction += new Vector3(
-                    0f,
-                    Mathf.Sign(Direction.y == 0 ? Random.value - 0.5f : Direction.y) * randomOffset,
-                    0f);
-            }
-
-            // Normalize again
-            Direction = Direction.normalized;
-
-            if (collision.gameObject.CompareTag("Brick"))
-            {
-                Brick brick = collision.gameObject.GetComponent<Brick>();
-                brick.Damage();
-                
-            }
-        }
-    
 
     private void OnTriggerEnter(Collider other)
     {
-         if (other.CompareTag("Failure"))
+        if (other.CompareTag("Failure"))
         {
             gameObject.SetActive(false);
         }

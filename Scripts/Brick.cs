@@ -10,8 +10,6 @@ public class Brick : MonoBehaviour
 
     [SerializeField] GameObject multiBalls;
     [SerializeField] GameObject UnderNeath;
-    [SerializeField] GameObject Rocket;
-
     public event Action<Brick> OnBrickDestroyed;
 
     public int Hits
@@ -75,8 +73,7 @@ public class Brick : MonoBehaviour
         GameObject[] powerUps =
         {
             multiBalls,
-            UnderNeath,
-            Rocket
+            UnderNeath
         };
 
         return powerUps[UnityEngine.Random.Range(0, powerUps.Length)];
